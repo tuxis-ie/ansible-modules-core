@@ -63,9 +63,10 @@ options:
         If C(touch) (new in 1.4), an empty file will be created if the C(path) does not
         exist, while an existing file or directory will receive updated file access and
         modification times (similar to the way `touch` works from the command line).
+        If C(socket), only permissions are checked and set, if the socket exists.
     required: false
     default: file
-    choices: [ file, link, directory, hard, touch, absent ]
+    choices: [ file, link, directory, hard, touch, absent, socket ]
   src:
     required: false
     default: null
@@ -120,6 +121,8 @@ def get_state(path):
             return 'directory'
         elif os.stat(path).st_nlink > 1:
             return 'hard'
+        elif stat.S_ISSOCK(os.stat(path).st_mode):
+            return 'socket'
         else:
             # could be many other things, but defaulting to file
             return 'file'
@@ -152,7 +155,7 @@ def main():
 
     module = AnsibleModule(
         argument_spec = dict(
-            state = dict(choices=['file','directory','link','hard','touch','absent'], default=None),
+            state = dict(choices=['file','directory','link','hard','touch','absent','socket'], default=None),
             path  = dict(aliases=['dest', 'name'], required=True),
             original_basename = dict(required=False), # Internal use only, for recursive ops
             recurse  = dict(default=False, type='bool'),
@@ -257,6 +260,15 @@ def main():
         if prev_state not in ['file','hard']:
             # file is not absent and any other state is a conflict
             module.fail_json(path=path, msg='file (%s) is %s, cannot continue' % (path, prev_state))
+
+        changed = module.set_fs_attributes_if_different(file_args, changed)
+        module.exit_json(path=path, changed=changed)
+
+    elif state == 'socket':
+
+        # If this is not a socket, quit. We only handle socket
+        if state != prev_state:
+            module.fail_json(msg="Not a socket, but %s" % (prev_state))
 
         changed = module.set_fs_attributes_if_different(file_args, changed)
         module.exit_json(path=path, changed=changed)
