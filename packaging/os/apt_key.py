@@ -123,6 +123,7 @@ def check_missing_binaries(module):
     if len(missing):
         module.fail_json(msg="binaries are missing", names=missing)
 
+
 def all_keys(module, keyring, short_format):
     if keyring:
         cmd = "apt-key --keyring %s adv --list-public-keys --keyid-format=long" % keyring
@@ -130,9 +131,9 @@ def all_keys(module, keyring, short_format):
         cmd = "apt-key adv --list-public-keys --keyid-format=long"
     (rc, out, err) = module.run_command(cmd)
     results = []
-    lines = out.split('\n')
+    lines = to_native(out).split('\n')
     for line in lines:
-        if line.startswith("pub"):
+        if line.startswith("pub") or line.startswith("sub"):
             tokens = line.split()
             code = tokens[1]
             (len_type, real_code) = code.split("/")
@@ -140,6 +141,7 @@ def all_keys(module, keyring, short_format):
     if short_format:
         results = shorten_key_ids(results)
     return results
+
 
 def shorten_key_ids(key_id_list):
     """
@@ -150,6 +152,7 @@ def shorten_key_ids(key_id_list):
     for key in key_id_list:
         short.append(key[-8:])
     return short
+
 
 def download_key(module, url):
     # FIXME: move get_url code to common, allow for in-memory D/L, support proxies
@@ -166,10 +169,22 @@ def download_key(module, url):
     except Exception:
         module.fail_json(msg="error getting key id from url: %s" % url, traceback=format_exc())
 
-def import_key(module, keyserver, key_id):
-    cmd = "apt-key adv --keyserver %s --recv %s" % (keyserver, key_id)
-    (rc, out, err) = module.run_command(cmd, check_rc=True)
+
+def import_key(module, keyring, keyserver, key_id):
+    if keyring:
+        cmd = "apt-key --keyring %s adv --keyserver %s --recv %s" % (keyring, keyserver, key_id)
+    else:
+        cmd = "apt-key adv --keyserver %s --recv %s" % (keyserver, key_id)
+    for retry in range(5):
+        (rc, out, err) = module.run_command(cmd)
+        if rc == 0:
+            break
+    else:
+        # Out of retries
+        module.fail_json(cmd=cmd, msg="error fetching key from keyserver: %s" % keyserver,
+                         rc=rc, stdout=out, stderr=err)
     return True
+
 
 def add_key(module, keyfile, keyring, data=None):
     if data is not None:
@@ -186,6 +201,7 @@ def add_key(module, keyfile, keyring, data=None):
         (rc, out, err) = module.run_command(cmd, check_rc=True)
     return True
 
+
 def remove_key(module, key_id, keyring):
     # FIXME: use module.run_command, fail at point of error and don't discard useful stdin/stdout
     if keyring:
@@ -194,6 +210,7 @@ def remove_key(module, key_id, keyring):
         cmd = 'apt-key del %s' % key_id
     (rc, out, err) = module.run_command(cmd, check_rc=True)
     return True
+
 
 def main():
     module = AnsibleModule(
@@ -220,19 +237,22 @@ def main():
     keyserver       = module.params['keyserver']
     changed         = False
 
+    # we use the "short" id: key_id[-8:], short_format=True
+    # it's a workaround for https://bugs.launchpad.net/ubuntu/+source/apt/+bug/1481871
+
     if key_id:
         try:
             _ = int(key_id, 16)
             if key_id.startswith('0x'):
                 key_id = key_id[2:]
-            key_id = key_id.upper()
+            key_id = key_id.upper()[-8:]
         except ValueError:
             module.fail_json(msg="Invalid key_id", id=key_id)
 
     # FIXME: I think we have a common facility for this, if not, want
     check_missing_binaries(module)
 
-    short_format = (key_id is not None and len(key_id) == 8)
+    short_format = True
     keys = all_keys(module, keyring, short_format)
     return_values = {}
 
@@ -250,14 +270,14 @@ def main():
                 if filename:
                     add_key(module, filename, keyring)
                 elif keyserver:
-                    import_key(module, keyserver, key_id)
+                    import_key(module, keyring, keyserver, key_id)
                 else:
                     add_key(module, "-", keyring, data)
                 changed=False
                 keys2 = all_keys(module, keyring, short_format)
                 if len(keys) != len(keys2):
                     changed=True
-                if key_id and not key_id[-16:] in keys2:
+                if key_id and not key_id in keys2:
                     module.fail_json(msg="key does not seem to have been added", id=key_id)
                 module.exit_json(changed=changed)
     elif state == 'absent':

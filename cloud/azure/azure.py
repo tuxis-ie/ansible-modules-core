@@ -110,13 +110,6 @@ options:
     required: false
     default: 'present'
     aliases: []
-  reset_pass_atlogon:
-    description:
-      - Reset the admin password on first logon for windows hosts
-    required: false
-    default: "no"
-    version_added: "2.0"
-    choices: [ "yes", "no" ]
   auto_updates:
     description:
       - Enable Auto Updates on Windows Machines
@@ -235,6 +228,15 @@ AZURE_ROLE_SIZES = ['ExtraSmall',
                     'Standard_D12',
                     'Standard_D13',
                     'Standard_D14',
+                    'Standard_D1_v2',
+                    'Standard_D2_v2',
+                    'Standard_D3_v2',
+                    'Standard_D4_v2',
+                    'Standard_D5_v2',
+                    'Standard_D11_v2',
+                    'Standard_D12_v2',
+                    'Standard_D13_v2',
+                    'Standard_D14_v2',
                     'Standard_DS1',
                     'Standard_DS2',
                     'Standard_DS3',
@@ -296,7 +298,7 @@ def _delete_disks_when_detached(azure, wait_timeout, disk_names):
                 if disk.attached_to is None:
                     azure.delete_disk(disk.name, True)
                     disk_names.remove(disk_name)
-    except AzureException, e:
+    except AzureException as e:
         module.fail_json(msg="failed to get or delete disk, error was: %s" % (disk_name, str(e)))
     finally:
         signal.alarm(0)
@@ -354,7 +356,7 @@ def create_virtual_machine(module, azure):
             result = azure.create_hosted_service(service_name=name, label=name, location=location)
             _wait_for_completion(azure, result, wait_timeout, "create_hosted_service")
             changed = True
-        except AzureException, e:
+        except AzureException as e:
             module.fail_json(msg="failed to create the new service, error was: %s" % str(e))
 
     try:
@@ -369,8 +371,7 @@ def create_virtual_machine(module, azure):
             vm_config = LinuxConfigurationSet(hostname, user, password, disable_ssh_password_authentication)
         else:
             #Create Windows Config
-            vm_config = WindowsConfigurationSet(hostname, password, module.params.get('reset_pass_atlogon'),\
-                                                 module.params.get('auto_updates'), None, user)
+            vm_config = WindowsConfigurationSet(hostname, password, None, module.params.get('auto_updates'), None, user)
             vm_config.domain_join = None
             if module.params.get('enable_winrm'):
                 listener = Listener('Http')
@@ -426,13 +427,13 @@ def create_virtual_machine(module, azure):
                                                              virtual_network_name=virtual_network_name)
             _wait_for_completion(azure, result, wait_timeout, "create_virtual_machine_deployment")
             changed = True
-        except AzureException, e:
+        except AzureException as e:
             module.fail_json(msg="failed to create the new virtual machine, error was: %s" % str(e))
 
     try:
         deployment = azure.get_deployment_by_name(service_name=name, deployment_name=name)
         return (changed, urlparse(deployment.url).hostname, deployment)
-    except AzureException, e:
+    except AzureException as e:
         module.fail_json(msg="failed to lookup the deployment information for %s, error was: %s" % (name, str(e)))
 
 
@@ -460,9 +461,9 @@ def terminate_virtual_machine(module, azure):
     disk_names = []
     try:
         deployment = azure.get_deployment_by_name(service_name=name, deployment_name=name)
-    except AzureMissingException, e:
+    except AzureMissingException as e:
         pass  # no such deployment or service
-    except AzureException, e:
+    except AzureException as e:
         module.fail_json(msg="failed to find the deployment, error was: %s" % str(e))
 
     # Delete deployment
@@ -475,13 +476,13 @@ def terminate_virtual_machine(module, azure):
                 role_props = azure.get_role(name, deployment.name, role.role_name)
                 if role_props.os_virtual_hard_disk.disk_name not in disk_names:
                     disk_names.append(role_props.os_virtual_hard_disk.disk_name)
-        except AzureException, e:
+        except AzureException as e:
             module.fail_json(msg="failed to get the role %s, error was: %s" % (role.role_name, str(e)))
 
         try:
             result = azure.delete_deployment(name, deployment.name)
             _wait_for_completion(azure, result, wait_timeout, "delete_deployment")
-        except AzureException, e:
+        except AzureException as e:
             module.fail_json(msg="failed to delete the deployment %s, error was: %s" % (deployment.name, str(e)))
 
         # It's unclear when disks associated with terminated deployment get detatched.
@@ -489,14 +490,14 @@ def terminate_virtual_machine(module, azure):
         # become detatched by polling the list of remaining disks and examining the state.
         try:
             _delete_disks_when_detached(azure, wait_timeout, disk_names)
-        except (AzureException, TimeoutError), e:
+        except (AzureException, TimeoutError) as e:
             module.fail_json(msg=str(e))
 
         try:
             # Now that the vm is deleted, remove the cloud service
             result = azure.delete_hosted_service(service_name=name)
             _wait_for_completion(azure, result, wait_timeout, "delete_hosted_service")
-        except AzureException, e:
+        except AzureException as e:
             module.fail_json(msg="failed to delete the service %s, error was: %s" % (name, str(e)))
         public_dns_name = urlparse(deployment.url).hostname
 
@@ -541,7 +542,6 @@ def main():
             wait=dict(type='bool', default=False),
             wait_timeout=dict(default=600),
             wait_timeout_redirects=dict(default=300),
-            reset_pass_atlogon=dict(type='bool', default=False),
             auto_updates=dict(type='bool', default=False),
             enable_winrm=dict(type='bool', default=True),
         )
@@ -605,7 +605,7 @@ class Wrapper(object):
         while wait_timeout > time.time():
             try:
                 return f()
-            except AzureException, e:
+            except AzureException as e:
                 if not str(e).lower().find("temporary redirect") == -1:
                     time.sleep(5)
                     pass

@@ -29,7 +29,6 @@ description:
   - If there is no AKI or ARI associated with an image, these will be C(null).
   - Only supports images from cloud-images.ubuntu.com
   - 'Example output: C({"ami": "ami-69f5a900", "changed": false, "aki": "aki-88aa75e1", "tag": "release", "ari": null, "serial": "20131024"})'
-version_added: "1.6"
 options:
   distro:
     description: Linux distribution (e.g., C(ubuntu))
@@ -57,9 +56,9 @@ options:
     description: EC2 region
     required: false
     default: us-east-1
-    choices: ["ap-northeast-1", "ap-southeast-1", "ap-southeast-2",
-              "eu-central-1", "eu-west-1", "sa-east-1", "us-east-1",
-              "us-west-1", "us-west-2", "us-gov-west-1"]
+    choices: ["ap-northeast-1", "ap-southeast-1", "ap-northeast-2",
+              "ap-southeast-2", "eu-central-1", "eu-west-1", "sa-east-1",
+              "us-east-1", "us-west-1", "us-west-2", "us-gov-west-1"]
   virt:
     description: virutalization type
     required: false
@@ -89,7 +88,9 @@ SUPPORTED_DISTROS = ['ubuntu']
 
 AWS_REGIONS = ['ap-northeast-1',
                'ap-southeast-1',
+               'ap-northeast-2',
                'ap-southeast-2',
+               'ap-south-1',
                'eu-central-1',
                'eu-west-1',
                'sa-east-1',

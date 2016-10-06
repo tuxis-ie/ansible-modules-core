@@ -187,7 +187,7 @@ def main():
     arg_spec = dict(
         path=dict(required=True, aliases=["dest", "destfile"]),
         name=dict(required=True, aliases=["username"]),
-        password=dict(required=False, default=None),
+        password=dict(required=False, default=None, no_log=True),
         crypt_scheme=dict(required=False, default="apr_md5_crypt"),
         state=dict(required=False, default="present"),
         create=dict(type='bool', default='yes'),
@@ -251,7 +251,8 @@ def main():
 
         check_file_attrs(module, changed, msg)
         module.exit_json(msg=msg, changed=changed)
-    except Exception, e:
+    except Exception:
+        e = get_exception()
         module.fail_json(msg=str(e))
 
 

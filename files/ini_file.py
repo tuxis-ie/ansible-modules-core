@@ -71,6 +71,12 @@ options:
      required: false
      default: "present"
      choices: [ "present", "absent" ]
+  no_extra_spaces:
+     description:
+       - do not insert spaces before and after '=' symbol
+     required: false
+     default: false
+     version_added: "2.1"
 notes:
    - While it is possible to add an I(option) without specifying a I(value), this makes
      no sense.
@@ -95,30 +101,29 @@ EXAMPLES = '''
             backup=yes
 '''
 
-import ConfigParser
-import sys
 import os
+import re
 
 # ==============================================================
 # match_opt
 
 def match_opt(option, line):
   option = re.escape(option)
-  return re.match('%s *=' % option, line) \
-    or re.match('# *%s *=' % option, line) \
-    or re.match('; *%s *=' % option, line)
+  return re.match(' *%s( |\t)*=' % option, line) \
+    or re.match('# *%s( |\t)*=' % option, line) \
+    or re.match('; *%s( |\t)*=' % option, line)
 
 # ==============================================================
 # match_active_opt
 
 def match_active_opt(option, line):
   option = re.escape(option)
-  return re.match('%s *=' % option, line)
+  return re.match(' *%s( |\t)*=' % option, line)
 
 # ==============================================================
 # do_ini
 
-def do_ini(module, filename, section=None, option=None, value=None, state='present', backup=False):
+def do_ini(module, filename, section=None, option=None, value=None, state='present', backup=False, no_extra_spaces=False):
 
 
     if not os.path.exists(filename):
@@ -137,6 +142,10 @@ def do_ini(module, filename, section=None, option=None, value=None, state='prese
     within_section = not section
     section_start = 0
     changed = False
+    if no_extra_spaces:
+        assignment_format = '%s=%s\n'
+    else:
+        assignment_format = '%s = %s\n'
 
     for index, line in enumerate(ini_lines):
         if line.startswith('[%s]' % section):
@@ -146,8 +155,12 @@ def do_ini(module, filename, section=None, option=None, value=None, state='prese
             if within_section:
                 if state == 'present':
                     # insert missing option line at the end of the section
-                    ini_lines.insert(index, '%s = %s\n' % (option, value))
-                    changed = True
+                    for i in range(index, 0, -1):
+                        # search backwards for previous non-blank or non-comment line
+                        if not re.match(r'^[ \t]*([#;].*)?$', ini_lines[i - 1]):
+                            ini_lines.insert(i, assignment_format % (option, value))
+                            changed = True
+                            break
                 elif state == 'absent' and not option:
                     # remove the entire section
                     del ini_lines[section_start:index]
@@ -158,7 +171,7 @@ def do_ini(module, filename, section=None, option=None, value=None, state='prese
                 if state == 'present':
                     # change the existing option line
                     if match_opt(option, line):
-                        newline = '%s = %s\n' % (option, value)
+                        newline = assignment_format % (option, value)
                         changed = ini_lines[index] != newline
                         ini_lines[index] = newline
                         if changed:
@@ -185,20 +198,21 @@ def do_ini(module, filename, section=None, option=None, value=None, state='prese
 
     if not within_section and option and state == 'present':
         ini_lines.append('[%s]\n' % section)
-        ini_lines.append('%s = %s\n' % (option, value))
+        ini_lines.append(assignment_format % (option, value))
         changed = True
 
 
+    backup_file = None
     if changed and not module.check_mode:
         if backup:
-            module.backup_local(filename)
+            backup_file = module.backup_local(filename)
         ini_file = open(filename, 'w')
         try:
             ini_file.writelines(ini_lines)
         finally:
             ini_file.close()
 
-    return changed
+    return (changed, backup_file)
 
 # ==============================================================
 # main
@@ -212,13 +226,12 @@ def main():
             option = dict(required=False),
             value = dict(required=False),
             backup = dict(default='no', type='bool'),
-            state = dict(default='present', choices=['present', 'absent'])
+            state = dict(default='present', choices=['present', 'absent']),
+            no_extra_spaces = dict(required=False, default=False, type='bool')
         ),
         add_file_common_args = True,
         supports_check_mode = True
     )
-
-    info = dict()
 
     dest = os.path.expanduser(module.params['dest'])
     section = module.params['section']
@@ -226,14 +239,19 @@ def main():
     value = module.params['value']
     state = module.params['state']
     backup = module.params['backup']
+    no_extra_spaces = module.params['no_extra_spaces']
 
-    changed = do_ini(module, dest, section, option, value, state, backup)
+    (changed,backup_file) = do_ini(module, dest, section, option, value, state, backup, no_extra_spaces)
 
     file_args = module.load_file_common_arguments(module.params)
     changed = module.set_fs_attributes_if_different(file_args, changed)
 
+    results = { 'changed': changed, 'msg': "OK", 'dest': dest }
+    if backup_file is not None:
+        results['backup_file'] = backup_file
+
     # Mission complete
-    module.exit_json(dest=dest, changed=changed, msg="OK")
+    module.exit_json(**results)
 
 # import module snippets
 from ansible.module_utils.basic import *

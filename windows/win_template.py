@@ -47,7 +47,7 @@ notes:
   - "templates are loaded with C(trim_blocks=True)."
   - By default, windows line endings are not created in the generated file.
   - "In order to ensure windows line endings are in the generated file, add the following header
-    as the first line of your template: #jinja2: newline_sequence:'\\\\r\\\\n' and ensure each line
+    as the first line of your template: ``#jinja2: newline_sequence:'\\r\\n'`` and ensure each line
     of the template ends with \\\\r\\\\n"
   - Beware fetching files from windows machines when creating templates
     because certain tools, such as Powershell ISE,  and regedit's export facility
@@ -57,8 +57,12 @@ author: "Jon Hawkesworth (@jhawkesworth)"
 '''
 
 EXAMPLES = '''
-# Playbook Example  (win_template can only be run inside a playbook)
-- win_template: src=/mytemplates/file.conf.j2 dest=C:\\temp\\file.conf
+# Playbook Example
+- win_template:
+    src: /mytemplates/file.conf.j2
+    dest: C:\temp\file.conf
 
+# Ad-hoc Example
+ansible winhost -m win_template -a "src=/mytemplates/file.conf.j2 dest=c:/temp/file.conf"
 
 '''

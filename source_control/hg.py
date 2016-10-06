@@ -23,8 +23,6 @@
 # You should have received a copy of the GNU General Public License
 # along with Ansible.  If not, see <http://www.gnu.org/licenses/>.
 
-import ConfigParser
-
 DOCUMENTATION = '''
 ---
 module: hg
@@ -92,6 +90,12 @@ EXAMPLES = '''
 - hg: repo=https://bitbucket.org/user/repo1 dest=/home/user/repo1 revision=stable purge=yes
 '''
 
+import os
+
+# import module snippets
+from ansible.module_utils.basic import AnsibleModule
+from ansible.module_utils._text import to_native
+
 class Hg(object):
 
     def __init__(self, module, dest, repo, revision, hg_path):
@@ -123,7 +127,7 @@ class Hg(object):
         if rc != 0:
             self.module.fail_json(msg=err)
         else:
-            return out.strip('\n')
+            return to_native(out).strip('\n')
 
     def has_local_mods(self):
         now = self.get_revision()
@@ -137,9 +141,7 @@ class Hg(object):
         if not before:
             return False
 
-        args = ['update', '-C', '-R', self.dest]
-        if self.revision is not None:
-            args = args + ['-r', self.revision]
+        args = ['update', '-C', '-R', self.dest, '-r', '.']
         (rc, out, err) = self._command(args)
         if rc != 0:
             self.module.fail_json(msg=err)
@@ -213,7 +215,7 @@ def main():
     module = AnsibleModule(
         argument_spec = dict(
             repo = dict(required=True, aliases=['name']),
-            dest = dict(required=True),
+            dest = dict(required=True, type='path'),
             revision = dict(default=None, aliases=['version']),
             force = dict(default='no', type='bool'),
             purge = dict(default='no', type='bool'),
@@ -222,7 +224,7 @@ def main():
         ),
     )
     repo = module.params['repo']
-    dest = os.path.expanduser(module.params['dest'])
+    dest = module.params['dest']
     revision = module.params['revision']
     force = module.params['force']
     purge = module.params['purge']
@@ -272,6 +274,5 @@ def main():
         changed = True
     module.exit_json(before=before, after=after, changed=changed, cleaned=cleaned)
 
-# import module snippets
-from ansible.module_utils.basic import *
-main()
+if __name__ == '__main__':
+    main()

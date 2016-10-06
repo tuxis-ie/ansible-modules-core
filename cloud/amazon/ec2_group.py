@@ -163,6 +163,10 @@ def validate_rule(module, rule):
     VALID_PARAMS = ('cidr_ip',
                     'group_id', 'group_name', 'group_desc',
                     'proto', 'from_port', 'to_port')
+
+    if not isinstance(rule, dict):
+        module.fail_json(msg='Invalid rule parameter type [%s].' % type(rule))
+
     for k in rule:
         if k not in VALID_PARAMS:
             module.fail_json(msg='Invalid rule parameter \'{}\''.format(k))
@@ -213,7 +217,7 @@ def get_target_from_rule(module, ec2, rule, name, group, groups, vpc_id):
             group_id = group.id
             groups[group_id] = group
             groups[group_name] = group
-        elif group_name in groups:
+        elif group_name in groups and (vpc_id is None or groups[group_name].vpc_id == vpc_id):
             group_id = groups[group_name].id
         else:
             if not rule.get('group_desc', '').strip():
@@ -233,12 +237,12 @@ def get_target_from_rule(module, ec2, rule, name, group, groups, vpc_id):
 def main():
     argument_spec = ec2_argument_spec()
     argument_spec.update(dict(
-            name=dict(required=True),
-            description=dict(required=True),
-            vpc_id=dict(),
-            rules=dict(),
-            rules_egress=dict(),
-            state = dict(default='present', choices=['present', 'absent']),
+            name=dict(type='str', required=True),
+            description=dict(type='str', required=True),
+            vpc_id=dict(type='str'),
+            rules=dict(type='list'),
+            rules_egress=dict(type='list'),
+            state = dict(default='present', type='str', choices=['present', 'absent']),
             purge_rules=dict(default=True, required=False, type='bool'),
             purge_rules_egress=dict(default=True, required=False, type='bool'),
 
@@ -285,8 +289,9 @@ def main():
         if group:
             '''found a match, delete it'''
             try:
-                group.delete()
-            except Exception, e:
+                if not module.check_mode:
+                    group.delete()
+            except Exception as e:
                 module.fail_json(msg="Unable to delete security group '%s' - %s" % (group, e))
             else:
                 group = None
@@ -425,20 +430,21 @@ def main():
                                     src_group_id=grantGroup,
                                     cidr_ip=thisip)
                         changed = True
-        elif vpc_id and not module.check_mode:
+        elif vpc_id:
             # when using a vpc, but no egress rules are specified,
             # we add in a default allow all out rule, which was the
             # default behavior before egress rules were added
             default_egress_rule = 'out--1-None-None-None-0.0.0.0/0'
             if default_egress_rule not in groupRules:
-                ec2.authorize_security_group_egress(
-                    group_id=group.id,
-                    ip_protocol=-1,
-                    from_port=None,
-                    to_port=None,
-                    src_group_id=None,
-                    cidr_ip='0.0.0.0/0'
-                )
+                if not module.check_mode:
+                    ec2.authorize_security_group_egress(
+                        group_id=group.id,
+                        ip_protocol=-1,
+                        from_port=None,
+                        to_port=None,
+                        src_group_id=None,
+                        cidr_ip='0.0.0.0/0'
+                    )
                 changed = True
             else:
                 # make sure the default egress rule is not removed

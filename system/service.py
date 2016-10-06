@@ -496,6 +496,8 @@ class LinuxService(Service):
         (rc, out, err) = self.execute_command("%s is-enabled %s" % (self.enable_cmd, service_name,))
         if rc == 0:
             return True
+        elif out.startswith('disabled'):
+            return False
         elif sysv_exists(service_name):
             return sysv_is_enabled(service_name)
         else:
@@ -514,27 +516,30 @@ class LinuxService(Service):
         value_buffer = []
         status_dict = {}
         for line in out.splitlines():
-            if not key:
-                key, value = line.split('=', 1)
-                # systemd fields that are shell commands can be multi-line
-                # We take a value that begins with a "{" as the start of
-                # a shell command and a line that ends with "}" as the end of
-                # the command
-                if value.lstrip().startswith('{'):
-                    if value.rstrip().endswith('}'):
+            if '=' in line:
+                if not key:
+                    key, value = line.split('=', 1)
+                    # systemd fields that are shell commands can be multi-line
+                    # We take a value that begins with a "{" as the start of
+                    # a shell command and a line that ends with "}" as the end of
+                    # the command
+                    if value.lstrip().startswith('{'):
+                        if value.rstrip().endswith('}'):
+                            status_dict[key] = value
+                            key = None
+                        else:
+                            value_buffer.append(value)
+                    else:
                         status_dict[key] = value
+                        key = None
+                else:
+                    if line.rstrip().endswith('}'):
+                        status_dict[key] = '\n'.join(value_buffer)
                         key = None
                     else:
                         value_buffer.append(value)
-                else:
-                    status_dict[key] = value
-                    key = None
             else:
-                if line.rstrip().endswith('}'):
-                    status_dict[key] = '\n'.join(value_buffer)
-                    key = None
-                else:
-                    value_buffer.append(value)
+                value_buffer.append(value)
 
         return status_dict
 
@@ -777,24 +782,23 @@ class LinuxService(Service):
                     action = 'enable'
                     klinks = glob.glob('/etc/rc?.d/K??' + self.name)
                     if not klinks:
-                        (rc, out, err) = self.execute_command("%s %s defaults"  % (self.enable_cmd, self.name))
-                        if rc != 0:
-                            if err:
-                                self.module.fail_json(msg=err)
-                            else:
-                                self.module.fail_json(msg=out) % (self.enable_cmd, self.name, action)
+                        if not self.module.check_mode:
+                            (rc, out, err) = self.execute_command("%s %s defaults"  % (self.enable_cmd, self.name))
+                            if rc != 0:
+                                if err:
+                                    self.module.fail_json(msg=err)
+                                else:
+                                    self.module.fail_json(msg=out) % (self.enable_cmd, self.name, action)
                 else:
                     action = 'disable'
 
-                if self.module.check_mode:
-                    rc = 0
-                    return
-                (rc, out, err) = self.execute_command("%s %s %s"  % (self.enable_cmd, self.name, action))
-                if rc != 0:
-                    if err:
-                        self.module.fail_json(msg=err)
-                    else:
-                        self.module.fail_json(msg=out) % (self.enable_cmd, self.name, action)
+                if not self.module.check_mode:
+                    (rc, out, err) = self.execute_command("%s %s %s"  % (self.enable_cmd, self.name, action))
+                    if rc != 0:
+                        if err:
+                            self.module.fail_json(msg=err)
+                        else:
+                            self.module.fail_json(msg=out) % (self.enable_cmd, self.name, action)
             else:
                 self.changed = False
 
@@ -941,9 +945,10 @@ class FreeBsdService(Service):
 
     def get_service_tools(self):
         self.svc_cmd = self.module.get_bin_path('service', True)
-
         if not self.svc_cmd:
             self.module.fail_json(msg='unable to find service binary')
+
+        self.sysrc_cmd = self.module.get_bin_path('sysrc')
 
     def get_service_status(self):
         rc, stdout, stderr = self.execute_command("%s %s %s %s" % (self.svc_cmd, self.name, 'onestatus', self.arguments))
@@ -989,10 +994,37 @@ class FreeBsdService(Service):
         if self.rcconf_key is None:
             self.module.fail_json(msg="unable to determine rcvar", stdout=stdout, stderr=stderr)
 
-        try:
-            return self.service_enable_rcconf()
-        except Exception:
-            self.module.fail_json(msg='unable to set rcvar')
+        if self.sysrc_cmd: # FreeBSD >= 9.2
+
+            rc, current_rcconf_value, stderr = self.execute_command("%s -n %s" % (self.sysrc_cmd, self.rcconf_key))
+            if rc != 0:
+                self.module.fail_json(msg="unable to get current rcvar value", stdout=stdout, stderr=stderr)
+
+            if current_rcconf_value.strip().upper() != self.rcconf_value:
+
+                self.changed = True
+
+                if self.module.check_mode:
+                    self.module.exit_json(changed=True, msg="changing service enablement")
+
+                rc, change_stdout, change_stderr = self.execute_command("%s %s=\"%s\"" % (self.sysrc_cmd, self.rcconf_key, self.rcconf_value ) )
+                if rc != 0:
+                    self.module.fail_json(msg="unable to set rcvar using sysrc", stdout=change_stdout, stderr=change_stderr)
+
+                # sysrc does not exit with code 1 on permission error => validate successful change using service(8)
+                rc, check_stdout, check_stderr = self.execute_command("%s %s %s" % (self.svc_cmd, self.name, "enabled"))
+                if self.enable != (rc == 0): # rc = 0 indicates enabled service, rc = 1 indicates disabled service
+                    self.module.fail_json(msg="unable to set rcvar: sysrc did not change value", stdout=change_stdout, stderr=change_stderr)
+
+            else:
+                self.changed = False
+
+        else: # Legacy (FreeBSD < 9.2)
+            try:
+                return self.service_enable_rcconf()
+            except Exception:
+                self.module.fail_json(msg='unable to set rcvar')
+
 
     def service_control(self):
 
@@ -1003,7 +1035,12 @@ class FreeBsdService(Service):
         if self.action == "reload":
             self.action = "onereload"
 
-        return self.execute_command("%s %s %s %s" % (self.svc_cmd, self.name, self.action, self.arguments))
+        ret = self.execute_command("%s %s %s %s" % (self.svc_cmd, self.name, self.action, self.arguments))
+
+        if self.sleep:
+            time.sleep(self.sleep)
+
+        return ret
 
 # ===========================================
 # Subclass: OpenBSD
@@ -1172,7 +1209,7 @@ class NetBsdService(Service):
     distribution = None
 
     def get_service_tools(self):
-        initpaths = [ '/etc/rc.d' ]		# better: $rc_directories - how to get in here? Run: sh -c '. /etc/rc.conf ; echo $rc_directories'
+        initpaths = [ '/etc/rc.d' ]  # better: $rc_directories - how to get in here? Run: sh -c '. /etc/rc.conf ; echo $rc_directories'
 
         for initdir in initpaths:
             initscript = "%s/%s" % (initdir,self.name)
@@ -1188,7 +1225,7 @@ class NetBsdService(Service):
         else:
             self.rcconf_value = "NO"
 
-        rcfiles = [ '/etc/rc.conf' ]		# Overkill?
+        rcfiles = [ '/etc/rc.conf' ]  # Overkill?
         for rcfile in rcfiles:
             if os.path.isfile(rcfile):
                 self.rcconf_file = rcfile
@@ -1425,10 +1462,9 @@ def main():
             runlevel = dict(required=False, default='default'),
             arguments = dict(aliases=['args'], default=''),
         ),
-        supports_check_mode=True
+        supports_check_mode=True,
+        required_one_of=[['state', 'enabled']],
     )
-    if module.params['state'] is None and module.params['enabled'] is None:
-        module.fail_json(msg="Neither 'state' nor 'enabled' set")
 
     service = Service(module)
 

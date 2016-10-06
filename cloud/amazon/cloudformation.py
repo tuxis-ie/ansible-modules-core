@@ -193,28 +193,28 @@ def stack_operation(cfn, stack_name, operation):
             if 'yes' in existed:
                 result = dict(changed=True,
                               output='Stack Deleted',
-                              events=map(str, list(stack.describe_events())))
+                              events=list(map(str, list(stack.describe_events()))))
             else:
                 result = dict(changed= True, output='Stack Not Found')
             break
         if '%s_COMPLETE' % operation == stack.stack_status:
             result = dict(changed=True,
-                          events = map(str, list(stack.describe_events())),
+                          events = list(map(str, list(stack.describe_events()))),
                           output = 'Stack %s complete' % operation)
             break
         if  'ROLLBACK_COMPLETE' == stack.stack_status or '%s_ROLLBACK_COMPLETE' % operation == stack.stack_status:
             result = dict(changed=True, failed=True,
-                          events = map(str, list(stack.describe_events())),
+                          events = list(map(str, list(stack.describe_events()))),
                           output = 'Problem with %s. Rollback complete' % operation)
             break
         elif '%s_FAILED' % operation == stack.stack_status:
             result = dict(changed=True, failed=True,
-                          events = map(str, list(stack.describe_events())),
+                          events = list(map(str, list(stack.describe_events()))),
                           output = 'Stack %s failed' % operation)
             break
         elif '%s_ROLLBACK_FAILED' % operation == stack.stack_status:
             result = dict(changed=True, failed=True,
-                          events = map(str, list(stack.describe_events())),
+                          events = list(map(str, list(stack.describe_events()))),
                           output = 'Stack %s rollback failed' % operation)
             break
         else:
@@ -229,7 +229,7 @@ def invoke_with_throttling_retries(function_ref, *argv):
         try:
             retval=function_ref(*argv)
             return retval
-        except boto.exception.BotoServerError, e:
+        except boto.exception.BotoServerError as e:
             if e.code != IGNORE_CODE or retries==MAX_RETRIES:
                 raise e
         time.sleep(5 * (2**retries))
@@ -247,7 +247,7 @@ def main():
             disable_rollback=dict(default=False, type='bool'),
             template_url=dict(default=None, required=False),
             template_format=dict(default='json', choices=['json', 'yaml'], required=False),
-            tags=dict(default=None)
+            tags=dict(default=None, type='dict')
         )
     )
 
@@ -257,9 +257,6 @@ def main():
     )
     if not HAS_BOTO:
         module.fail_json(msg='boto required for this module')
-
-    if module.params['template'] is None and module.params['template_url'] is None:
-        module.fail_json(msg='Either template or template_url expected')
 
     state = module.params['state']
     stack_name = module.params['stack_name']
@@ -305,11 +302,8 @@ def main():
     stack_outputs = {}
 
     try:
-        cfn = boto.cloudformation.connect_to_region(
-                  region,
-                  **aws_connect_kwargs
-              )
-    except boto.exception.NoAuthHandlerFound, e:
+        cfn = connect_to_aws(boto.cloudformation, region, **aws_connect_kwargs)
+    except boto.exception.NoAuthHandlerFound as e:
         module.fail_json(msg=str(e))
     update = False
     result = {}
@@ -325,10 +319,10 @@ def main():
                              stack_policy_body=stack_policy_body,
                              template_url=template_url,
                              disable_rollback=disable_rollback,
-                             capabilities=['CAPABILITY_IAM'],
+                             capabilities=['CAPABILITY_IAM', 'CAPABILITY_NAMED_IAM'],
                              **kwargs)
             operation = 'CREATE'
-        except Exception, err:
+        except Exception as err:
             error_msg = boto_exception(err)
             if 'AlreadyExistsException' in error_msg or 'already exists' in error_msg:
                 update = True
@@ -348,9 +342,10 @@ def main():
                              stack_policy_body=stack_policy_body,
                              disable_rollback=disable_rollback,
                              template_url=template_url,
-                             capabilities=['CAPABILITY_IAM'])
+                             capabilities=['CAPABILITY_IAM', 'CAPABILITY_NAMED_IAM'],
+                             **kwargs)
             operation = 'UPDATE'
-        except Exception, err:
+        except Exception as err:
             error_msg = boto_exception(err)
             if 'No updates are to be performed.' in error_msg:
                 result = dict(changed=False, output='Stack is already up-to-date.')
@@ -387,7 +382,7 @@ def main():
         try:
             invoke_with_throttling_retries(cfn.describe_stacks,stack_name)
             operation = 'DELETE'
-        except Exception, err:
+        except Exception as err:
             error_msg = boto_exception(err)
             if 'Stack:%s does not exist' % stack_name in error_msg:
                 result = dict(changed=False, output='Stack not found.')
@@ -403,4 +398,5 @@ def main():
 from ansible.module_utils.basic import *
 from ansible.module_utils.ec2 import *
 
-main()
+if __name__ == '__main__':
+    main()

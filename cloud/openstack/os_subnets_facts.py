@@ -130,7 +130,7 @@ def main():
 
     argument_spec = openstack_full_argument_spec(
         name=dict(required=False, default=None),
-        filters=dict(required=False, default=None)
+        filters=dict(required=False, type='dict', default=None)
     )
     module = AnsibleModule(argument_spec)
 
@@ -145,7 +145,7 @@ def main():
             openstack_subnets=subnets))
 
     except shade.OpenStackCloudException as e:
-        module.fail_json(msg=e.message)
+        module.fail_json(msg=str(e))
 
 # this is magic, see lib/ansible/module_common.py
 from ansible.module_utils.basic import *

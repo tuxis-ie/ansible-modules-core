@@ -109,6 +109,7 @@ options:
     default: "present"
     choices: ["active", "present", "absent", "deleted"]
     aliases: []
+    required: false
   service_account_email:
     version_added: "1.6"
     description:
@@ -120,9 +121,16 @@ options:
     version_added: "1.6"
     description:
       - path to the pem file associated with the service account email
+        This option is deprecated. Use 'credentials_file'.
     required: false
     default: null
     aliases: []
+  credentials_file:
+    version_added: "2.1.0"
+    description:
+      - path to the JSON file associated with the service account email
+    default: null
+    required: false
   project_id:
     version_added: "1.6"
     description:
@@ -133,7 +141,7 @@ options:
 
 requirements:
     - "python >= 2.6"
-    - "apache-libcloud >= 0.13.3"
+    - "apache-libcloud >= 0.13.3, >= 0.17.0 if using JSON credentials"
 author: "Eric Johnson (@erjohnso) <erjohnso@google.com>"
 '''
 
@@ -182,6 +190,7 @@ def main():
             state = dict(default='present'),
             service_account_email = dict(),
             pem_file = dict(),
+            credentials_file = dict(),
             project_id = dict(),
         )
     )
@@ -213,7 +222,7 @@ def main():
         gcelb = get_driver_lb(Provider_lb.GCE)(gce_driver=gce)
         gcelb.connection.user_agent_append("%s/%s" % (
                 USER_AGENT_PRODUCT, USER_AGENT_VERSION))
-    except Exception, e:
+    except Exception as e:
         module.fail_json(msg=unexpected_error_msg(e), changed=False)
 
     changed = False
@@ -239,7 +248,7 @@ def main():
                 changed = True
             except ResourceExistsError:
                 hc = gce.ex_get_healthcheck(httphealthcheck_name)
-            except Exception, e:
+            except Exception as e:
                 module.fail_json(msg=unexpected_error_msg(e), changed=False)
 
             if hc is not None:
@@ -283,7 +292,7 @@ def main():
                 changed = True
             except ResourceExistsError:
                 lb = gcelb.get_balancer(name)
-            except Exception, e:
+            except Exception as e:
                 module.fail_json(msg=unexpected_error_msg(e), changed=False)
 
             if lb is not None:
@@ -309,7 +318,7 @@ def main():
                 changed = True
             except ResourceNotFoundError:
                 pass
-            except Exception, e:
+            except Exception as e:
                 module.fail_json(msg=unexpected_error_msg(e), changed=False)
 
         # destroy the health check if specified
@@ -321,7 +330,7 @@ def main():
                 changed = True
             except ResourceNotFoundError:
                 pass
-            except Exception, e:
+            except Exception as e:
                 module.fail_json(msg=unexpected_error_msg(e), changed=False)
 
 

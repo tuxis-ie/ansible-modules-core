@@ -41,7 +41,7 @@ options:
    password:
      description:
         - Password for the user
-     required: true when I(state) is present
+     required: false
      default: None
    email:
      description:
@@ -148,9 +148,6 @@ def main():
     module_kwargs = openstack_module_kwargs()
     module = AnsibleModule(
         argument_spec,
-        required_if=[
-            ('state', 'present', ['password'])
-        ],
         **module_kwargs)
 
     if not HAS_SHADE:
@@ -168,14 +165,30 @@ def main():
         cloud = shade.openstack_cloud(**module.params)
         user = cloud.get_user(name)
 
-        project_id = None
-        if default_project:
-            project = cloud.get_project(default_project)
-            if not project:
-                module.fail_json(msg='Default project %s is not valid' % default_project)
-            project_id = project['id']
+        if domain:
+            opcloud = shade.operator_cloud(**module.params)
+            try:
+                # We assume admin is passing domain id
+                dom = opcloud.get_domain(domain)['id']
+                domain = dom
+            except:
+                # If we fail, maybe admin is passing a domain name.
+                # Note that domains have unique names, just like id.
+                try:
+                    dom = opcloud.search_domains(filters={'name': domain})[0]['id']
+                    domain = dom
+                except:
+                    # Ok, let's hope the user is non-admin and passing a sane id
+                    pass
 
         if state == 'present':
+            project_id = None
+            if default_project:
+                project = cloud.get_project(default_project)
+                if not project:
+                    module.fail_json(msg='Default project %s is not valid' % default_project)
+                project_id = project['id']
+
             if user is None:
                 user = cloud.create_user(
                     name=name, password=password, email=email,
@@ -202,7 +215,7 @@ def main():
             module.exit_json(changed=changed)
 
     except shade.OpenStackCloudException as e:
-        module.fail_json(msg=e.message, extra_data=e.extra_data)
+        module.fail_json(msg=str(e), extra_data=e.extra_data)
 
 from ansible.module_utils.basic import *
 from ansible.module_utils.openstack import *

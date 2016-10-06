@@ -45,7 +45,7 @@ options:
   fail_on_missing:
     version_added: "1.1"
     description:
-      - Makes it fails when the source file is missing.
+      - When set to 'yes', the task will fail if the source file is missing.
     required: false
     choices: [ "yes", "no" ]
     default: "no"
@@ -68,6 +68,13 @@ requirements: []
 author: 
     - "Ansible Core Team"
     - "Michael DeHaan"
+notes:
+    - When running fetch with C(become), the M(slurp) module will also be
+      used to fetch the contents of the file for determining the remote
+      checksum. This effectively doubles the transfer size, and
+      depending on the file size can consume all available memory on the
+      remote or local hosts causing a C(MemoryError). Due to this it is
+      advisable to run this module without C(become) whenever possible.
 '''
 
 EXAMPLES = '''
@@ -75,11 +82,11 @@ EXAMPLES = '''
 - fetch: src=/tmp/somefile dest=/tmp/fetched
 
 # Specifying a path directly
-- fetch: src=/tmp/somefile dest=/tmp/prefix-{{ ansible_hostname }} flat=yes
+- fetch: src=/tmp/somefile dest=/tmp/prefix-{{ inventory_hostname }} flat=yes
 
 # Specifying a destination path
 - fetch: src=/tmp/uniquefile dest=/tmp/special/ flat=yes
 
 # Storing in a path relative to the playbook
-- fetch: src=/tmp/uniquefile dest=special/prefix-{{ ansible_hostname }} flat=yes
+- fetch: src=/tmp/uniquefile dest=special/prefix-{{ inventory_hostname }} flat=yes
 '''

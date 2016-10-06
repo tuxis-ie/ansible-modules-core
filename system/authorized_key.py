@@ -26,19 +26,17 @@ DOCUMENTATION = '''
 module: authorized_key
 short_description: Adds or removes an SSH authorized key
 description:
-     - Adds or removes an SSH authorized key for a user from a remote host.
+    - "Adds or removes SSH authorized keys for particular user accounts"
 version_added: "0.5"
 options:
   user:
     description:
       - The username on the remote host whose authorized_keys file will be modified
     required: true
-    default: null
   key:
     description:
       - The SSH public key(s), as a string or (since 1.9) url (https://github.com/username.keys)
     required: true
-    default: null
   path:
     description:
       - Alternate path to the authorized_keys file
@@ -82,15 +80,13 @@ options:
     version_added: "1.9"
   validate_certs:
     description:
-      - This only applies if using a https url as the source of the keys. If set to C(no), the SSL certificates will not be validated. 
-      - This should only set to C(no) used on personally controlled sites using self-signed certificates as it avoids verifying the source site. 
+      - This only applies if using a https url as the source of the keys. If set to C(no), the SSL certificates will not be validated.
+      - This should only set to C(no) used on personally controlled sites using self-signed certificates as it avoids verifying the source site.
       - Prior to 2.1 the code worked as if this was set to C(yes).
     required: false
     default: "yes"
     choices: ["yes", "no"]
-    version_added: "2.1" 
-description:
-    - "Adds or removes authorized keys for particular user accounts"
+    version_added: "2.1"
 author: "Ansible Core Team"
 '''
 
@@ -128,6 +124,11 @@ EXAMPLES = '''
 - authorized_key: user=root key="{{ item }}" state=present exclusive=yes
   with_file:
     - public_keys/doe-jane
+
+# Copies the key from the user who is running ansible to the remote machine user ubuntu
+- authorized_key: user=ubuntu key="{{ lookup('file', lookup('env','HOME') + '/.ssh/id_rsa.pub') }}"
+  become: yes
+
 '''
 
 # Makes sure the public key line is present or absent in the user's .ssh/authorized_keys.
@@ -165,7 +166,7 @@ class keydict(dict):
     def __iter__(self):
         return iter(self.itemlist)
     def keys(self):
-        return self.itemlist
+        return list(set(self.itemlist))
     def values(self):
         return [self[key] for key in self]
     def itervalues(self):
@@ -189,7 +190,8 @@ def keyfile(module, user, write=False, path=None, manage_dir=True):
 
     try:
         user_entry = pwd.getpwnam(user)
-    except KeyError, e:
+    except KeyError:
+        e = get_exception()
         if module.check_mode and path is None:
             module.fail_json(msg="Either user must exist or you must provide full path to key file in check mode")
         module.fail_json(msg="Failed to lookup user %s: %s" % (user, str(e)))
@@ -209,11 +211,11 @@ def keyfile(module, user, write=False, path=None, manage_dir=True):
 
     if manage_dir:
         if not os.path.exists(sshdir):
-            os.mkdir(sshdir, 0700)
+            os.mkdir(sshdir, int('0700', 8))
             if module.selinux_enabled():
                 module.set_default_selinux_context(sshdir, False)
         os.chown(sshdir, uid, gid)
-        os.chmod(sshdir, 0700)
+        os.chmod(sshdir, int('0700', 8))
 
     if not os.path.exists(keysfile):
         basedir = os.path.dirname(keysfile)
@@ -228,7 +230,7 @@ def keyfile(module, user, write=False, path=None, manage_dir=True):
 
     try:
         os.chown(keysfile, uid, gid)
-        os.chmod(keysfile, 0600)
+        os.chmod(keysfile, int('0600', 8))
     except OSError:
         pass
 
@@ -249,7 +251,13 @@ def parseoptions(module, options):
             for part in parts:
                 if "=" in part:
                     (key, value) = part.split("=", 1)
-                    options_dict[key] = value
+                    if options_dict.has_key(key):
+                        if isinstance(options_dict[key], list):
+                            options_dict[key].append(value)
+                        else:
+                            options_dict[key] = [options_dict[key], value]
+                    else:
+                        options_dict[key] = value
                 elif part != ",":
                     options_dict[part] = None
         except:
@@ -343,17 +351,21 @@ def writekeys(module, filename, keys):
                     option_strings = []
                     for option_key in options.keys():
                         if options[option_key]:
-                            option_strings.append("%s=%s" % (option_key, options[option_key]))
+                            if isinstance(options[option_key], list):
+                                for value in options[option_key]:
+                                    option_strings.append("%s=%s" % (option_key, value))
+                            else:
+                                option_strings.append("%s=%s" % (option_key, options[option_key]))
                         else:
                             option_strings.append("%s" % option_key)
-
                     option_str = ",".join(option_strings)
                     option_str += " "
                 key_line = "%s%s %s %s\n" % (option_str, type, keyhash, comment)
             except:
                 key_line = key
             f.writelines(key_line)
-    except IOError, e:
+    except IOError:
+        e = get_exception()
         module.fail_json(msg="Failed to write to file %s: %s" % (tmp_path, str(e)))
     f.close()
     module.atomic_move(tmp_path, filename)

@@ -50,6 +50,7 @@ author:
 
 import datetime
 import traceback
+from ansible.module_utils.six import iteritems
 
 def main():
 
@@ -66,7 +67,7 @@ def main():
     log_path = os.path.join(logdir, jid)
 
     if not os.path.exists(log_path):
-        module.fail_json(msg="could not find job", ansible_job_id=jid)
+        module.fail_json(msg="could not find job", ansible_job_id=jid, started=1, finished=1)
 
     if mode == 'cleanup':
         os.unlink(log_path)
@@ -76,23 +77,26 @@ def main():
     # no remote kill mode currently exists, but probably should
     # consider log_path + ".pid" file and also unlink that above
 
-    data = file(log_path).read()
+    data = None
     try:
+        data = open(log_path).read()
         data = json.loads(data)
-    except Exception, e:
-        if data == '':
+    except Exception:
+        if not data:
             # file not written yet?  That means it is running
             module.exit_json(results_file=log_path, ansible_job_id=jid, started=1, finished=0)
         else:
             module.fail_json(ansible_job_id=jid, results_file=log_path,
-                msg="Could not parse job output: %s" % data)
+                msg="Could not parse job output: %s" % data, started=1, finished=1)
 
     if not 'started' in data:
         data['finished'] = 1
         data['ansible_job_id'] = jid
+    elif 'finished' not in data:
+        data['finished'] = 0
 
     # Fix error: TypeError: exit_json() keywords must be strings
-    data = dict([(str(k), v) for k, v in data.iteritems()])
+    data = dict([(str(k), v) for k, v in iteritems(data)])
 
     module.exit_json(**data)
 

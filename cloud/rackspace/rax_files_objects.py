@@ -196,8 +196,23 @@ META_PREFIX = 'x-object-meta-'
 def _get_container(module, cf, container):
     try:
         return cf.get_container(container)
-    except pyrax.exc.NoSuchContainer, e:
+    except pyrax.exc.NoSuchContainer as e:
         module.fail_json(msg=e.message)
+
+
+def _upload_folder(cf, folder, container, ttl=None, headers=None):
+    """ Uploads a folder to Cloud Files.
+    """
+    total_bytes = 0
+    for root, dirs, files in os.walk(folder):
+        for fname in files:
+            full_path = os.path.join(root, fname)
+            obj_name = os.path.relpath(full_path, folder)
+            obj_size = os.path.getsize(full_path)
+            cf.upload_file(container, full_path,
+                           obj_name=obj_name, return_none=True, ttl=ttl, headers=headers)
+            total_bytes += obj_size
+    return total_bytes
 
 
 def upload(module, cf, container, src, dest, meta, expires):
@@ -205,13 +220,10 @@ def upload(module, cf, container, src, dest, meta, expires):
     metadata, TTL value (expires), or Content-Disposition and Content-Encoding
     headers.
     """
-    c = _get_container(module, cf, container)
-
-    num_objs_before = len(c.get_object_names())
-
     if not src:
         module.fail_json(msg='src must be specified when uploading')
 
+    c = _get_container(module, cf, container)
     src = os.path.abspath(os.path.expanduser(src))
     is_dir = os.path.isdir(src)
 
@@ -222,68 +234,29 @@ def upload(module, cf, container, src, dest, meta, expires):
                              'directories are uploaded')
 
     cont_obj = None
+    total_bytes = 0
     if dest and not is_dir:
         try:
-            cont_obj = c.upload_file(src, obj_name=dest, ttl=expires)
-        except Exception, e:
+            cont_obj = c.upload_file(src, obj_name=dest, ttl=expires, headers=meta)
+        except Exception as e:
             module.fail_json(msg=e.message)
     elif is_dir:
         try:
-            id, total_bytes = cf.upload_folder(src, container=c.name, ttl=expires)
-        except Exception, e:
+            total_bytes = _upload_folder(cf, src, c, ttl=expires, headers=meta)
+        except Exception as e:
             module.fail_json(msg=e.message)
-
-        while True:
-            bytes = cf.get_uploaded(id)
-            if bytes == total_bytes:
-                break
-            time.sleep(1)
     else:
         try:
-            cont_obj = c.upload_file(src, ttl=expires)
-        except Exception, e:
+            cont_obj = c.upload_file(src, ttl=expires, headers=meta)
+        except Exception as e:
             module.fail_json(msg=e.message)
-
-    num_objs_after = len(c.get_object_names())
-
-    if not meta:
-        meta = dict()
-
-    meta_result = dict()
-    if meta:
-        if cont_obj:
-            meta_result = cont_obj.set_metadata(meta)
-        else:
-            def _set_meta(objs, meta):
-                """ Sets metadata on a list of objects specified by name """
-                for obj in objs:
-                    try:
-                        result = c.get_object(obj).set_metadata(meta)
-                    except Exception, e:
-                        module.fail_json(msg=e.message)
-                    else:
-                        meta_result[obj] = result
-                return meta_result
-
-            def _walker(objs, path, filenames):
-                """ Callback func for os.path.walk  """
-                prefix = ''
-                if path != src:
-                    prefix = path.split(src)[-1].lstrip('/')
-                filenames = [os.path.join(prefix, name) for name in filenames
-                             if not os.path.isdir(os.path.join(path, name))]
-                objs += filenames
-
-            _objs = []
-            os.path.walk(src, _walker, _objs)
-            meta_result = _set_meta(_objs, meta)
 
     EXIT_DICT['success'] = True
     EXIT_DICT['container'] = c.name
     EXIT_DICT['msg'] = "Uploaded %s to container: %s" % (src, c.name)
-    if cont_obj or locals().get('bytes'):
+    if cont_obj or total_bytes > 0:
         EXIT_DICT['changed'] = True
-    if meta_result:
+    if meta:
         EXIT_DICT['meta'] = dict(updated=True)
 
     if cont_obj:
@@ -326,7 +299,7 @@ def download(module, cf, container, src, dest, structure):
     for obj in objs:
         try:
             c.download_object(obj, dest, structure=structure)
-        except Exception, e:
+        except Exception as e:
             module.fail_json(msg=e.message)
         else:
             results.append(obj)
@@ -375,7 +348,7 @@ def delete(module, cf, container, src, dest):
     for obj in objs:
         try:
             result = c.delete_object(obj)
-        except Exception, e:
+        except Exception as e:
             module.fail_json(msg=e.message)
         else:
             results.append(result)
@@ -423,7 +396,7 @@ def get_meta(module, cf, container, src, dest):
     for obj in objs:
         try:
             meta = c.get_object(obj).get_metadata()
-        except Exception, e:
+        except Exception as e:
             module.fail_json(msg=e.message)
         else:
             results[obj] = dict()
@@ -461,7 +434,7 @@ def put_meta(module, cf, container, src, dest, meta, clear_meta):
     for obj in objs:
         try:
             result = c.get_object(obj).set_metadata(meta, clear=clear_meta)
-        except Exception, e:
+        except Exception as e:
             module.fail_json(msg=e.message)
         else:
             results.append(result)
@@ -500,20 +473,20 @@ def delete_meta(module, cf, container, src, dest, meta):
             for k, v in meta.items():
                 try:
                     result = c.get_object(obj).remove_metadata_key(k)
-                except Exception, e:
+                except Exception as e:
                     module.fail_json(msg=e.message)
                 else:
                     results.append(result)
         else:
             try:
                 o = c.get_object(obj)
-            except pyrax.exc.NoSuchObject, e:
+            except pyrax.exc.NoSuchObject as e:
                 module.fail_json(msg=e.message)
 
             for k, v in o.get_metadata().items():
                 try:
                     result = o.remove_metadata_key(k)
-                except Exception, e:
+                except Exception as e:
                     module.fail_json(msg=e.message)
                 results.append(result)
 

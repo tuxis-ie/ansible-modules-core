@@ -75,6 +75,14 @@ options:
     choices: [ "yes", "no" ]
     default: "no"
     aliases: [ "thirsty" ]
+  backup:
+    description:
+      - Create a backup file including the timestamp information so you can get
+        the original file back if you somehow clobbered it incorrectly.
+    required: false
+    choices: [ "yes", "no" ]
+    default: "no"
+    version_added: '2.1'
   sha256sum:
     description:
       - If a SHA-256 checksum is passed to this parameter, the digest of the
@@ -90,8 +98,8 @@ options:
         destination file will be calculated after it is downloaded to ensure
         its integrity and verify that the transfer completed successfully.
         Format: <algorithm>:<checksum>, e.g.: checksum="sha256:D98291AC[...]B6DC7B97"
-        If you worry about portability, only the sha1 algorithm is available 
-        on all platforms and python versions.  The third party hashlib 
+        If you worry about portability, only the sha1 algorithm is available
+        on all platforms and python versions.  The third party hashlib
         library can be installed for access to additional algorithms.
         Additionaly, if a checksum is passed to this parameter, and the file exist under
         the C(dest) location, the destination_checksum would be calculated, and if
@@ -116,7 +124,7 @@ options:
     choices: ['yes', 'no']
   timeout:
     description:
-      - Timeout for URL request
+      - Timeout in seconds for URL request
     required: false
     default: 10
     version_added: '1.8'
@@ -154,31 +162,55 @@ options:
     required: false
 # informational: requirements for nodes
 requirements: [ ]
+extends_documentation_fragment:
+    - files
 author: "Jan-Piet Mens (@jpmens)"
 '''
 
 EXAMPLES='''
 - name: download foo.conf
-  get_url: url=http://example.com/path/file.conf dest=/etc/foo.conf mode=0440
+  get_url: 
+    url: http://example.com/path/file.conf 
+    dest: /etc/foo.conf 
+    mode: 0440
 
 - name: download file and force basic auth
-  get_url: url=http://example.com/path/file.conf dest=/etc/foo.conf force_basic_auth=yes
+  get_url: 
+    url: http://example.com/path/file.conf 
+    dest: /etc/foo.conf 
+    force_basic_auth: yes
 
 - name: download file with custom HTTP headers
-  get_url: url=http://example.com/path/file.conf dest=/etc/foo.conf headers='key:value,key:value'
+  get_url: 
+    url: http://example.com/path/file.conf 
+    dest: /etc/foo.conf 
+    headers: 'key:value,key:value'
 
-- name: download file with check
-  get_url: url=http://example.com/path/file.conf dest=/etc/foo.conf checksum=sha256:b5bb9d8014a0f9b1d61e21e796d78dccdf1352f23cd32812f4850b878ae4944c
-  get_url: url=http://example.com/path/file.conf dest=/etc/foo.conf checksum=md5:66dffb5228a211e61d6d7ef4a86f5758
+- name: download file with check (sha256)
+  get_url: 
+    url: http://example.com/path/file.conf 
+    dest: /etc/foo.conf 
+    checksum: sha256:b5bb9d8014a0f9b1d61e21e796d78dccdf1352f23cd32812f4850b878ae4944c
+
+- name: download file with check (md5)
+  get_url: 
+    url: http://example.com/path/file.conf 
+    dest: /etc/foo.conf
+    checksum: md5:66dffb5228a211e61d6d7ef4a86f5758
+
+- name: download file from a file path
+  get_url: 
+    url: "file:///tmp/afile.txt" 
+    dest: /tmp/afilecopy.txt  
 '''
 
-import urlparse
+from ansible.module_utils.six.moves.urllib.parse import urlsplit
 
 # ==============================================================
 # url handling
 
 def url_filename(url):
-    fn = os.path.basename(urlparse.urlsplit(url)[2])
+    fn = os.path.basename(urlsplit(url)[2])
     if fn == '':
         return 'index.html'
     return fn
@@ -196,7 +228,7 @@ def url_get(module, url, dest, use_proxy, last_mod_time, force, timeout=10, head
         module.exit_json(url=url, dest=dest, changed=False, msg=info.get('msg', ''))
 
     # create a temporary file and copy content to do checksum-based replacement
-    if info['status'] != 200:
+    if info['status'] != 200 and not url.startswith('file:/') and not (url.startswith('ftp:/') and info.get('msg', '').startswith('OK')):
         module.fail_json(msg="Request failed", status_code=info['status'], response=info['msg'], url=url, dest=dest)
 
     if tmp_dest != '':
@@ -215,7 +247,8 @@ def url_get(module, url, dest, use_proxy, last_mod_time, force, timeout=10, head
     f = os.fdopen(fd, 'wb')
     try:
         shutil.copyfileobj(rsp, f)
-    except Exception, err:
+    except Exception:
+        err = get_exception()
         os.remove(tempname)
         module.fail_json(msg="failed to create temporary content file: %s" % str(err))
     f.close()
@@ -246,11 +279,11 @@ def extract_filename_from_headers(headers):
 # main
 
 def main():
-
     argument_spec = url_argument_spec()
     argument_spec.update(
         url = dict(required=True),
         dest = dict(required=True),
+        backup = dict(default=False, type='bool'),
         sha256sum = dict(default=''),
         checksum = dict(default=''),
         timeout = dict(required=False, type='int', default=10),
@@ -266,6 +299,7 @@ def main():
 
     url  = module.params['url']
     dest = os.path.expanduser(module.params['dest'])
+    backup = module.params['backup']
     force = module.params['force']
     sha256sum = module.params['sha256sum']
     checksum = module.params['checksum']
@@ -276,7 +310,7 @@ def main():
     # Parse headers to dict
     if module.params['headers']:
         try:
-            headers = dict(item.split(':') for item in module.params['headers'].split(','))
+            headers = dict(item.split(':', 1) for item in module.params['headers'].split(','))
         except:
             module.fail_json(msg="The header parameter requires a key:value,key:value syntax to be properly parsed.")
     else:
@@ -301,7 +335,6 @@ def main():
         except ValueError:
             module.fail_json(msg="The checksum parameter has to be in format <algorithm>:<checksum>")
 
-
     if not dest_is_dir and os.path.exists(dest):
         checksum_mismatch = False
 
@@ -317,12 +350,25 @@ def main():
 
         # Not forcing redownload, unless checksum does not match
         if not force and not checksum_mismatch:
-            module.exit_json(msg="file already exists", dest=dest, url=url, changed=False)
+            # allow file attribute changes
+            module.params['path'] = dest
+            file_args = module.load_file_common_arguments(module.params)
+            file_args['path'] = dest
+            changed = module.set_fs_attributes_if_different(file_args, False)
+
+            if changed:
+                module.exit_json(msg="file already exists but file attributes changed", dest=dest, url=url, changed=changed)
+            module.exit_json(msg="file already exists", dest=dest, url=url, changed=changed)
 
         # If the file already exists, prepare the last modified time for the
         # request.
         mtime = os.path.getmtime(dest)
         last_mod_time = datetime.datetime.utcfromtimestamp(mtime)
+
+        # If the checksum does not match we have to force the download
+        # because last_mod_time may be newer than on remote
+        if checksum_mismatch:
+            force = True
 
     # download to tmpsrc
     tmpsrc, info = url_get(module, url, dest, use_proxy, last_mod_time, force, timeout, headers, tmp_dest)
@@ -366,10 +412,15 @@ def main():
             os.remove(tmpsrc)
             module.fail_json( msg="Destination %s not writable" % (os.path.dirname(dest)))
 
+    backup_file = None
     if checksum_src != checksum_dest:
         try:
+            if backup:
+                if os.path.exists(dest):
+                    backup_file = module.backup_local(dest)
             shutil.copyfile(tmpsrc, dest)
-        except Exception, err:
+        except Exception: 
+            err = get_exception()
             os.remove(tmpsrc)
             module.fail_json(msg="failed to copy %s to %s: %s" % (tmpsrc, dest, str(err)))
         changed = True
@@ -397,9 +448,15 @@ def main():
     except ValueError:
         md5sum = None
 
+    res_args = dict(
+        url = url, dest = dest, src = tmpsrc, md5sum = md5sum, checksum_src = checksum_src,
+        checksum_dest = checksum_dest, changed = changed, msg = info.get('msg', '')
+    )
+    if backup_file:
+        res_args['backup_file'] = backup_file
+
     # Mission complete
-    module.exit_json(url=url, dest=dest, src=tmpsrc, md5sum=md5sum, checksum_src=checksum_src,
-        checksum_dest=checksum_dest, changed=changed, msg=info.get('msg', ''))
+    module.exit_json(**res_args)
 
 # import module snippets
 from ansible.module_utils.basic import *

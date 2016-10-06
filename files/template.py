@@ -37,7 +37,7 @@ description:
 options:
   src:
     description:
-      - Path of a Jinja2 formatted template on the local server. This can be a relative or absolute path.
+      - Path of a Jinja2 formatted template on the Ansible controller. This can be a relative or absolute path.
     required: true
   dest:
     description:
@@ -60,6 +60,13 @@ options:
     default: "yes"
 notes:
   - "Since Ansible version 0.9, templates are loaded with C(trim_blocks=True)."
+  - "Also, you can override jinja2 settings by adding a special header to template file.
+    i.e. C(#jinja2:variable_start_string:'[%' , variable_end_string:'%]', trim_blocks: False)
+    which changes the variable interpolation markers to  [% var %] instead of  {{ var }}.
+    This is the best way to prevent evaluation of things that look like, but should not be Jinja2.
+    raw/endraw in Jinja2 will not work as you expect because templates in Ansible are recursively evaluated."
+
+
 author:
     - Ansible Core Team
     - Michael DeHaan

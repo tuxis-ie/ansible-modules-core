@@ -44,6 +44,13 @@ options:
     description:
       - FQDN record name to create
     required: True
+  overwrite:
+    description:
+      - Add new records if data doesn't match, instead of updating existing
+        record with matching name. If there are already multiple records with
+        matching name and overwrite=true, this module will fail.
+    default: true
+    version_added: 2.1
   priority:
     description:
       - Required for MX and SRV records, but forbidden for other record types.
@@ -145,7 +152,7 @@ def rax_dns_record_ptr(module, data=None, comment=None, loadbalancer=None,
                     try:
                         dns.update_ptr_record(item, record, name, data, ttl)
                         changed = True
-                    except Exception, e:
+                    except Exception as e:
                         module.fail_json(msg='%s' % e.message)
                     record.ttl = ttl
                     record.name = name
@@ -161,7 +168,7 @@ def rax_dns_record_ptr(module, data=None, comment=None, loadbalancer=None,
             try:
                 results = dns.add_ptr_records(item, [record])
                 changed = True
-            except Exception, e:
+            except Exception as e:
                 module.fail_json(msg='%s' % e.message)
 
         module.exit_json(changed=changed, records=results)
@@ -177,14 +184,15 @@ def rax_dns_record_ptr(module, data=None, comment=None, loadbalancer=None,
             try:
                 dns.delete_ptr_records(item, data)
                 changed = True
-            except Exception, e:
+            except Exception as e:
                 module.fail_json(msg='%s' % e.message)
 
         module.exit_json(changed=changed, records=results)
 
 
 def rax_dns_record(module, comment=None, data=None, domain=None, name=None,
-                   priority=None, record_type='A', state='present', ttl=7200):
+                   overwrite=True, priority=None, record_type='A',
+                   state='present', ttl=7200):
     """Function for manipulating record types other than PTR"""
 
     changed = False
@@ -202,14 +210,17 @@ def rax_dns_record(module, comment=None, data=None, domain=None, name=None,
 
         try:
             domain = dns.find(name=domain)
-        except Exception, e:
+        except Exception as e:
             module.fail_json(msg='%s' % e.message)
 
         try:
-            record = domain.find_record(record_type, name=name)
-        except pyrax.exceptions.DomainRecordNotUnique, e:
-            module.fail_json(msg='%s' % e.message)
-        except pyrax.exceptions.DomainRecordNotFound, e:
+            if overwrite:
+                record = domain.find_record(record_type, name=name)
+            else:
+                record = domain.find_record(record_type, name=name, data=data)
+        except pyrax.exceptions.DomainRecordNotUnique as e:
+            module.fail_json(msg='overwrite=true and there are multiple matching records')
+        except pyrax.exceptions.DomainRecordNotFound as e:
             try:
                 record_data = {
                     'type': record_type,
@@ -224,7 +235,7 @@ def rax_dns_record(module, comment=None, data=None, domain=None, name=None,
 
                 record = domain.add_records([record_data])[0]
                 changed = True
-            except Exception, e:
+            except Exception as e:
                 module.fail_json(msg='%s' % e.message)
 
         update = {}
@@ -242,28 +253,28 @@ def rax_dns_record(module, comment=None, data=None, domain=None, name=None,
                 record.update(**update)
                 changed = True
                 record.get()
-            except Exception, e:
+            except Exception as e:
                 module.fail_json(msg='%s' % e.message)
 
     elif state == 'absent':
         try:
             domain = dns.find(name=domain)
-        except Exception, e:
+        except Exception as e:
             module.fail_json(msg='%s' % e.message)
 
         try:
             record = domain.find_record(record_type, name=name, data=data)
-        except pyrax.exceptions.DomainRecordNotFound, e:
+        except pyrax.exceptions.DomainRecordNotFound as e:
             record = {}
             pass
-        except pyrax.exceptions.DomainRecordNotUnique, e:
+        except pyrax.exceptions.DomainRecordNotUnique as e:
             module.fail_json(msg='%s' % e.message)
 
         if record:
             try:
                 record.delete()
                 changed = True
-            except Exception, e:
+            except Exception as e:
                 module.fail_json(msg='%s' % e.message)
 
     module.exit_json(changed=changed, record=rax_to_dict(record))
@@ -278,6 +289,7 @@ def main():
             domain=dict(),
             loadbalancer=dict(),
             name=dict(required=True),
+            overwrite=dict(type='bool', default=True),
             priority=dict(type='int'),
             server=dict(),
             state=dict(default='present', choices=['present', 'absent']),
@@ -306,6 +318,7 @@ def main():
     domain = module.params.get('domain')
     loadbalancer = module.params.get('loadbalancer')
     name = module.params.get('name')
+    overwrite = module.params.get('overwrite')
     priority = module.params.get('priority')
     server = module.params.get('server')
     state = module.params.get('state')
@@ -323,8 +336,8 @@ def main():
                            state=state, ttl=ttl)
     else:
         rax_dns_record(module, comment=comment, data=data, domain=domain,
-                       name=name, priority=priority, record_type=record_type,
-                       state=state, ttl=ttl)
+                       name=name, overwrite=overwrite, priority=priority,
+                       record_type=record_type, state=state, ttl=ttl)
 
 
 # import module snippets
